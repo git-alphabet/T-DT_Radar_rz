@@ -1,0 +1,24 @@
+# compose.build.yml — 构建配置（与 compose.yml 叠加使用）
+# 用法:
+#   docker compose --project-directory . -f docker/compose.yml -f docker/compose.build.yml build
+#   docker compose --project-directory . -f docker/compose.yml -f docker/compose.build.yml build --no-cache
+
+services:
+  radar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # conda-forge 走清华镜像；nvidia channel 无镜像，走宿主机 Clash 代理
+      # HOST_PROXY_PORT 在 .env 中设置（默认 7897）
+      # 宿主机在构建容器内可达 172.17.0.1
+      args:
+        - http_proxy=http://172.17.0.1:${HOST_PROXY_PORT:-7897}
+        - https_proxy=http://172.17.0.1:${HOST_PROXY_PORT:-7897}
+        - HTTP_PROXY=http://172.17.0.1:${HOST_PROXY_PORT:-7897}
+        - HTTPS_PROXY=http://172.17.0.1:${HOST_PROXY_PORT:-7897}
+        - no_proxy=mirrors.tuna.tsinghua.edu.cn,pypi.tuna.tsinghua.edu.cn,localhost,127.0.0.1
+        - NO_PROXY=mirrors.tuna.tsinghua.edu.cn,pypi.tuna.tsinghua.edu.cn,localhost,127.0.0.1
+      # 构建参数可在 .env 中覆盖
+      labels:
+        - "org.opencontainers.image.source=https://github.com/${DOCKER_HUB_USER}/${IMAGE_NAME}"
+        - "org.opencontainers.image.description=RZ Radar 2025 - RoboMaster Vision"

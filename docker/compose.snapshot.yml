@@ -1,0 +1,47 @@
+name: tdt-radar-snapshot
+
+services:
+  snapshot:
+    image: docker:27-cli
+    working_dir: /workspace
+    environment:
+      TARGET_CONTAINER: ${TARGET_CONTAINER:-tdt-radar-dev}
+      SNAPSHOT_TAG: ${SNAPSHOT_TAG:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ..:/workspace:rw
+      - ${HOME}/.docker:/root/.docker:ro
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+        set -eu
+        if [ -z "$$DOCKER_HUB_USER" ] || [ -z "$$IMAGE_NAME" ]; then
+          echo "[错误] 缺少 DOCKER_HUB_USER 或 IMAGE_NAME，请先在 .env 配置。"
+          exit 1
+        fi
+
+        REPO="$$DOCKER_HUB_USER/$$IMAGE_NAME"
+        TAG="$${SNAPSHOT_TAG:-$$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)}"
+        TARGET="$$TARGET_CONTAINER"
+
+        if ! docker container inspect "$$TARGET" >/dev/null 2>&1; then
+          echo "[错误] 找不到目标容器: $$TARGET"
+          echo "[提示] 先用 docker ps 确认容器名，或设置 TARGET_CONTAINER=xxx"
+          exit 1
+        fi
+
+        echo "[1/4] commit $$TARGET -> $$REPO:$$TAG"
+        docker commit "$$TARGET" "$$REPO:$$TAG"
+
+        echo "[2/4] tag latest"
+        docker tag "$$REPO:$$TAG" "$$REPO:latest"
+
+        echo "[3/4] push $$REPO:$$TAG"
+        docker push "$$REPO:$$TAG"
+
+        echo "[4/4] push $$REPO:latest"
+        docker push "$$REPO:latest"
+
+        echo "$$TAG" > /workspace/.last_snapshot_tag
+        echo "[完成] 已推送 $$REPO:$$TAG 和 $$REPO:latest"
