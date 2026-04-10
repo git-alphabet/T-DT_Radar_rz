@@ -39,6 +39,8 @@ RUN export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
     python3-vcstool \
         ros-jazzy-cv-bridge \
         ros-jazzy-image-transport \
+        ros-jazzy-foxglove-bridge \
+        ros-jazzy-nav2-map-server \
         ros-jazzy-pcl-conversions \
         ros-jazzy-pcl-msgs \
         sudo \
@@ -131,9 +133,16 @@ RUN if [[ "${INSTALL_NVIDIA_STACK}" == "1" ]]; then \
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+ENV ROS_DISTRO=jazzy
+ENV ROS_VERSION=2
+ENV ROS_PYTHON_VERSION=3
+ENV AMENT_PREFIX_PATH=/opt/ros/jazzy
+ENV CMAKE_PREFIX_PATH=/opt/ros/jazzy
+ENV COLCON_PREFIX_PATH=/opt/ros/jazzy
+ENV PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages
 ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
+ENV PATH=/opt/ros/jazzy/bin:/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/ros/jazzy/lib:/usr/local/cuda/lib64
 
 RUN set -eux; \
     if ! getent group "${USER_GID}" >/dev/null; then \
@@ -153,7 +162,16 @@ RUN set -eux; \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"; \
     chmod 0440 "/etc/sudoers.d/${USERNAME}"
 
-RUN rosdep init 2>/dev/null || true
+RUN rosdep init 2>/dev/null || true \
+    && echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc \
+    && echo "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash" >> /root/.bashrc \
+    && echo "source /opt/ros/jazzy/setup.bash" >> /etc/bash.bashrc \
+    && echo "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash" >> /etc/bash.bashrc \
+    && printf '%s\n' \
+        'source /opt/ros/jazzy/setup.bash' \
+        'source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash' \
+       > /etc/profile.d/ros2_env.sh \
+    && chmod 0644 /etc/profile.d/ros2_env.sh
 
 USER ${USERNAME}
 RUN rosdep update || true \
