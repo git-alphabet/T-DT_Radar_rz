@@ -19,6 +19,9 @@ ament_auto_find_build_dependencies()
 option(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
+# Avoid PTX JIT on older host drivers (e.g. 535/CUDA 12.2):
+# build real SASS for common Ada/Ampere cards only.
+set(CMAKE_CUDA_ARCHITECTURES "86-real;89-real")
 include_directories(/usr/local/cuda/include)
 link_directories(/usr/local/cuda/lib64)
 

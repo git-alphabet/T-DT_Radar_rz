@@ -1,20 +1,24 @@
 import os
 import sys
-import yaml
 from ament_index_python.packages import get_package_share_directory
 
 sys.path.append(os.path.join(get_package_share_directory("tdt_vision"), "launch"))
 
 from launch_ros.descriptions import ComposableNode
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch.actions import Shutdown
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+
+    rosbag_file = LaunchConfiguration("rosbag_file")
+    enable_map_server = LaunchConfiguration("enable_map_server")
+    enable_foxglove = LaunchConfiguration("enable_foxglove")
 
 
     def get_rosbag_player_node(package, plugin):
@@ -24,8 +28,7 @@ def generate_launch_description():
             name="rosbag_player_node",
             parameters=[
                 {
-                    "rosbag_file":
-                    "/home/mozihe/2025/T-DT_Radar/merged_bag_1.db3"
+                    "rosbag_file": rosbag_file
                 }
             ],
             extra_arguments=[{"use_intra_process_comms": True}],
@@ -60,7 +63,7 @@ def generate_launch_description():
         )
 
     def get_camera_detector_container(
-        radar_detect_node, radar_resolve_node, foxglove_node, ros_bag_player_node
+        radar_detect_node, radar_resolve_node, ros_bag_player_node
     ):
         return ComposableNodeContainer(
             name="camera_detector_container",
@@ -70,7 +73,6 @@ def generate_launch_description():
             composable_node_descriptions=[
                 radar_detect_node,
                 radar_resolve_node,
-                foxglove_node,
                 ros_bag_player_node,
             ],
             output="both",
@@ -87,7 +89,12 @@ def generate_launch_description():
     ros_bag_player_node = get_rosbag_player_node('rosbag_player', 'RosbagPlayer')
 
     cam_detector = get_camera_detector_container(
-        radar_detect_node, radar_resolve_node, foxglove_node, ros_bag_player_node
+        radar_detect_node, radar_resolve_node, ros_bag_player_node
+    )
+    load_foxglove = LoadComposableNodes(
+        target_container="camera_detector_container",
+        composable_node_descriptions=[foxglove_node],
+        condition=IfCondition(enable_foxglove),
     )
 
     plugin_map_launch_cmd = IncludeLaunchDescription(
@@ -100,5 +107,25 @@ def generate_launch_description():
                 )
             ]
         ),
+        condition=IfCondition(enable_map_server),
     )
-    return LaunchDescription([cam_detector, plugin_map_launch_cmd])
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            "rosbag_file",
+            default_value="/workspace/T-DT_Radar/rosbag.db3",
+            description="Absolute path to rosbag file inside container",
+        ),
+        DeclareLaunchArgument(
+            "enable_map_server",
+            default_value="false",
+            description="Enable nav2 map server launch",
+        ),
+        DeclareLaunchArgument(
+            "enable_foxglove",
+            default_value="false",
+            description="Enable foxglove bridge component",
+        ),
+        cam_detector,
+        load_foxglove,
+        plugin_map_launch_cmd,
+    ])

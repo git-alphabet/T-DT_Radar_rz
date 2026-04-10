@@ -31,10 +31,11 @@ private:
     std::shared_ptr<Infer<yolo::BoxArray>>     armor_yolo;
     std::shared_ptr<Infer<int>> classifier;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub;
 
     bool        if_rosbag = false;
     int         EnemyColor;
-    int         debug;
+    bool        debug = true;
     std::string yolo_path;
     std::string armor_path;
     std::string classify_path;

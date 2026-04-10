@@ -62,6 +62,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     : Node("radar_detect_node", node_options)
 {
     cv::namedWindow("detect", cv::WINDOW_NORMAL);
+    this->declare_parameter<bool>("debug_visual", true);
+    debug = this->get_parameter("debug_visual").as_bool();
 
     std::cout << "Checking CUDA with nvidia-smi...\n";
     if (system("nvidia-smi") == 0) {
@@ -132,6 +134,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
         std::bind(&Detect::callback, this, std::placeholders::_1));
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
         "detect_result", rclcpp::SensorDataQoS());
+    debug_image_pub = this->create_publisher<sensor_msgs::msg::Image>(
+        "detect_debug_image", rclcpp::SensorDataQoS());
     RCLCPP_INFO(this->get_logger(), "Detect node has been started.");
 }
 
@@ -325,6 +329,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
               << std::endl;
     cv::Mat final_img;
     cv::resize(img, final_img, cv::Size(1536, 1125));
+    auto debug_msg = cv_bridge::CvImage(msg->header, "bgr8", final_img).toImageMsg();
+    debug_image_pub->publish(*debug_msg);
     cv::imshow("detect", final_img);
     auto key = cv::waitKey(1);
     if (key == 'r') {
