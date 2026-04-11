@@ -9,3 +9,30 @@ config/merged_bag/*
 *.engine
 
 ros2bags/
+.uav_export_venv/
+.github/instructions/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+
+*.db3
