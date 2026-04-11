@@ -200,6 +200,72 @@ static __global__ void decode_kernel_v8(float* predict, int num_bboxes,
     *pout_item++ = position;
 }
 
+static __global__ void decode_kernel_end2end(float* predict,
+                                             int    num_bboxes,
+                                             float  confidence_threshold,
+                                             float* invert_affine_matrix,
+                                             float* parray,
+                                             int    MAX_IMAGE_BOXES)
+{
+    int position = blockDim.x * blockIdx.x + threadIdx.x;
+    if (position >= num_bboxes)
+        return;
+
+    float* pitem = predict + 6 * position;
+
+    float left = pitem[0];
+    float top = pitem[1];
+    float right = pitem[2];
+    float bottom = pitem[3];
+    float confidence = pitem[4];
+    int   label = (int)pitem[5];
+
+    if (confidence < confidence_threshold)
+        return;
+
+    int index = atomicAdd(parray, 1);
+    if (index >= MAX_IMAGE_BOXES)
+        return;
+
+    affine_project(invert_affine_matrix, left, top, &left, &top);
+    affine_project(invert_affine_matrix, right, bottom, &right,
+                   &bottom);
+
+    float* pout_item = parray + 1 + index * NUM_BOX_ELEMENT;
+    *pout_item++ = left;
+    *pout_item++ = top;
+    *pout_item++ = right;
+    *pout_item++ = bottom;
+    *pout_item++ = confidence;
+    *pout_item++ = label;
+    *pout_item++ = 1;  // 1 = keep, 0 = ignore
+    *pout_item++ = position;
+}
+
+static __global__ void transpose_cxn_to_nxc_kernel(
+    const float* input, float* output, int channels, int num_bboxes)
+{
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    int total = channels * num_bboxes;
+    if (idx >= total)
+        return;
+
+    int c = idx / num_bboxes;
+    int n = idx % num_bboxes;
+    output[n * channels + c] = input[c * num_bboxes + n];
+}
+
+static void transpose_cxn_to_nxc(float* input, float* output,
+                                 int channels, int num_bboxes,
+                                 cudaStream_t stream)
+{
+    int total = channels * num_bboxes;
+    int block = total < GPU_BLOCK_THREADS ? total : GPU_BLOCK_THREADS;
+    int grid = (total + block - 1) / block;
+    checkKernel(transpose_cxn_to_nxc_kernel<<<grid, block, 0, stream>>>(
+        input, output, channels, num_bboxes));
+}
+
 static __device__ float box_iou(float aleft, float atop, float aright,
                                 float abottom, float bleft, float btop,
                                 float bright, float bbottom)
@@ -266,12 +332,17 @@ static void decode_kernel_invoker(float* predict, int num_bboxes,
                                   float  nms_threshold,
                                   float* invert_affine_matrix,
                                   float* parray, int MAX_IMAGE_BOXES,
-                                  Type type, cudaStream_t stream)
+                                  Type type, cudaStream_t stream,
+                                  bool is_end2end = false)
 {
     auto grid = grid_dims(num_bboxes);
     auto block = block_dims(num_bboxes);
 
-    if (type == Type::V8 || type == Type::V8Seg) {
+    if (is_end2end) {
+        checkKernel(decode_kernel_end2end<<<grid, block, 0, stream>>>(
+            predict, num_bboxes, confidence_threshold,
+            invert_affine_matrix, parray, MAX_IMAGE_BOXES));
+    } else if (type == Type::V8 || type == Type::V8Seg) {
         checkKernel(decode_kernel_v8<<<grid, block, 0, stream>>>(
             predict, num_bboxes, num_classes, output_cdim,
             confidence_threshold, invert_affine_matrix, parray,
@@ -424,12 +495,17 @@ public:
     int                network_input_width_, network_input_height_;
     Norm               normalize_;
     vector<int>        bbox_head_dims_;
+    int                bbox_num_bboxes_ = 0;
+    int                bbox_output_cdim_ = 0;
+    bool               bbox_channel_first_ = false;
+    bool               bbox_end2end_ = false;
     vector<int>        segment_head_dims_;
     int                num_classes_ = 0;
     bool               has_segment_ = false;
     bool               has_keyPoint = false;
     bool               isdynamic_model_ = false;
     vector<shared_ptr<trt::Memory<unsigned char>>> box_segment_cache_;
+    trt::Memory<float>                            bbox_decode_buffer_;
 
     virtual ~InferImpl() = default;
 
@@ -440,6 +516,10 @@ public:
         input_buffer_.gpu(batch_size * input_numel);
         bbox_predict_.gpu(batch_size * bbox_head_dims_[1] *
                           bbox_head_dims_[2]);
+        if (bbox_channel_first_) {
+            bbox_decode_buffer_.gpu(batch_size * bbox_num_bboxes_ *
+                                    bbox_output_cdim_);
+        }
         output_boxarray_.gpu(batch_size *
                              (32 + MAX_IMAGE_BOXES * NUM_BOX_ELEMENT));
         output_boxarray_.cpu(batch_size *
@@ -517,13 +597,41 @@ public:
 
         auto input_dim = trt_->static_dims(0);
         bbox_head_dims_ = trt_->static_dims(1);
+        bbox_num_bboxes_ = bbox_head_dims_[1];
+        bbox_output_cdim_ = bbox_head_dims_[2];
+        bbox_channel_first_ = false;
+        bbox_end2end_ = false;
 
         has_segment_ = type == Type::V8Seg;
         has_keyPoint = type == Type::V5Face;
         if (has_segment_) {
             bbox_head_dims_ = trt_->static_dims(2);
             segment_head_dims_ = trt_->static_dims(1);
+            bbox_num_bboxes_ = bbox_head_dims_[1];
+            bbox_output_cdim_ = bbox_head_dims_[2];
         }
+
+        // Compatibility for UAV models with different V8 output layouts.
+        // 1) [B, N, C] raw decode (existing)
+        // 2) [B, C, N] raw decode (transpose to [B, N, C])
+        // 3) [B, N, 6] end2end (xyxy, score, cls)
+        if (!has_segment_ && type == Type::V8) {
+            if (bbox_head_dims_[1] <= 16 && bbox_head_dims_[2] >= 1000) {
+                bbox_channel_first_ = true;
+                bbox_num_bboxes_ = bbox_head_dims_[2];
+                bbox_output_cdim_ = bbox_head_dims_[1];
+                INFO("V8 output layout detected: [B,C,N]=[%d,%d], transpose enabled",
+                     bbox_head_dims_[1], bbox_head_dims_[2]);
+            } else if (bbox_head_dims_[2] == 6 &&
+                       bbox_head_dims_[1] <= 3000) {
+                bbox_end2end_ = true;
+                bbox_num_bboxes_ = bbox_head_dims_[1];
+                bbox_output_cdim_ = bbox_head_dims_[2];
+                INFO("V8 output layout detected: end2end [B,N,6]=[%d,6]",
+                     bbox_head_dims_[1]);
+            }
+        }
+
         network_input_width_ = input_dim[3];
         network_input_height_ = input_dim[2];
         isdynamic_model_ = trt_->has_dynamic_dim();
@@ -535,7 +643,11 @@ public:
         } else if (type == Type::V8) {
             normalize_ =
                 Norm::alpha_beta(1 / 255.0f, 0.0f, ChannelType::SwapRB);
-            num_classes_ = bbox_head_dims_[2] - 4;
+            if (bbox_end2end_) {
+                num_classes_ = 1;
+            } else {
+                num_classes_ = bbox_output_cdim_ - 4;
+            }
         } else if (type == Type::V8Seg) {
             normalize_ =
                 Norm::alpha_beta(1 / 255.0f, 0.0f, ChannelType::SwapRB);
@@ -550,6 +662,14 @@ public:
         } else {
             INFO("Unsupport type %d", type);
         }
+
+        if (!bbox_end2end_ && num_classes_ <= 0) {
+            INFO("Invalid decode classes=%d, output dims={%d,%d,%d}",
+                 num_classes_, bbox_head_dims_[0], bbox_head_dims_[1],
+                 bbox_head_dims_[2]);
+            return false;
+        }
+
         return true;
     }
 
@@ -627,6 +747,21 @@ public:
             std::chrono::duration_cast<std::chrono::duration<double>>(a3d2 -
                                                                       a3d1);
 
+        float* decode_predict_device = bbox_output_device;
+        if (bbox_channel_first_) {
+            float* transposed = bbox_decode_buffer_.gpu();
+            int    channels = bbox_head_dims_[1];
+            int    num_bboxes = bbox_head_dims_[2];
+            size_t per_batch = channels * num_bboxes;
+            for (int ib = 0; ib < num_image; ++ib) {
+                transpose_cxn_to_nxc(
+                    bbox_output_device + ib * per_batch,
+                    transposed + ib * per_batch, channels, num_bboxes,
+                    stream_);
+            }
+            decode_predict_device = transposed;
+        }
+
         for (int ib = 0; ib < num_image; ++ib) {
             float* boxarray_device =
                 output_boxarray_.gpu() +
@@ -634,16 +769,16 @@ public:
             float* affine_matrix_device =
                 (float*)preprocess_buffers_[ib]->gpu();
             float* image_based_bbox_output =
-                bbox_output_device +
-                ib * (bbox_head_dims_[1] * bbox_head_dims_[2]);
+                decode_predict_device +
+                ib * (bbox_num_bboxes_ * bbox_output_cdim_);
 
             checkRuntime(
                 cudaMemsetAsync(boxarray_device, 0, sizeof(int), stream_));
             decode_kernel_invoker(
-                image_based_bbox_output, bbox_head_dims_[1], num_classes_,
-                bbox_head_dims_[2], confidence_threshold_, nms_threshold_,
+                image_based_bbox_output, bbox_num_bboxes_, num_classes_,
+                bbox_output_cdim_, confidence_threshold_, nms_threshold_,
                 affine_matrix_device, boxarray_device, MAX_IMAGE_BOXES,
-                type_, stream_);
+                type_, stream_, bbox_end2end_);
         }
         std::chrono ::high_resolution_clock::time_point a3d3 =
             std::chrono::high_resolution_clock::now();
