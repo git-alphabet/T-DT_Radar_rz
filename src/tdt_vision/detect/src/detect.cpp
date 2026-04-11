@@ -10,6 +10,18 @@
 namespace tdt_radar {
 unsigned int count_img = 0;
 
+template <typename T>
+void readYamlOrDefault(cv::FileStorage& fs, const std::string& key,
+                       T& value, const T& default_value)
+{
+    auto node = fs[key];
+    if (node.empty()) {
+        value = default_value;
+        return;
+    }
+    node >> value;
+}
+
 int getColor(cv::Mat& img)
 {
     std::vector<cv::Mat> channels;
@@ -74,61 +86,90 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     }
     cv::FileStorage fs;
     fs.open("./config/detect_params.yaml", cv::FileStorage::READ);
-    fs["yolo_path"] >> yolo_path;
-    fs["armor_path"] >> armor_path;
-    fs["classify_path"] >> classify_path;
+    readYamlOrDefault(fs, "yolo_path", yolo_path,
+                      std::string("model/TensorRT/yolo.engine"));
+    readYamlOrDefault(fs, "armor_path", armor_path,
+                      std::string("model/TensorRT/armor_yolo.engine"));
+    readYamlOrDefault(fs, "classify_path", classify_path,
+                      std::string("model/TensorRT/classify.engine"));
+    readYamlOrDefault(fs, "uav_mode", uav_mode, false);
+    readYamlOrDefault(fs, "uav_yolo_path", uav_yolo_path,
+                      std::string("model/TensorRT/uav.engine"));
+    readYamlOrDefault(fs, "uav_target_class", uav_target_class, -1);
+    readYamlOrDefault(fs, "uav_confidence_threshold",
+                      uav_confidence_threshold, 0.35);
     fs.release();
 
-    std::ifstream file1(yolo_path.c_str());
-    if (!file1.good()) {
-        system("python3 src/utils/onnx2trt.py "
-               "--onnx=model/ONNX/RM2025.onnx "
-               "--saveEngine=model/TensorRT/yolo.engine "
-               "--minBatch 1 "
-               "--optBatch 1 "
-               "--maxBatch 2 "
-               "--Shape=1280x1280 "
-               "--input_name=images");
-    } else {
-        TDT_INFO("Load yolo engine!");
-    }
-    std::ifstream file2(armor_path.c_str());
-    if (!file2.good()) {
-        system("python3 src/utils/onnx2trt.py "
-               "--onnx=model/ONNX/armor_yolo.onnx "
-               "--saveEngine=model/TensorRT/armor_yolo.engine "
-               "--minBatch 1 "
-               "--optBatch 5 "
-               "--maxBatch 12 "
-               "--Shape=192x192 "
-               "--input_name=images");
-    } else {
-        TDT_INFO("Load armor_yolo engine!");
-    }
-    std::ifstream file3(classify_path.c_str());
-    if (!file3.good()) {
-        system("python3 src/utils/onnx2trt.py "
-               "--onnx=model/ONNX/classify.onnx "
-               "--saveEngine=model/TensorRT/classify.engine "
-               "--minBatch 1 "
-               "--optBatch 10 "
-               "--maxBatch 20 "
-               "--Shape=224x224 "
-               "--input_name=input");
-    } else {
-        TDT_INFO("Load classify engine!");
-    }
-    std::cout << "yolo_path:" << yolo_path << "\n";
-    std::cout << "armor_path:" << armor_path << "\n";
-    std::cout << "classify_path:" << classify_path << "\n";
-    this->classifier =
-        classify::load(classify_path, classify::Type::densenet121);
-    TDT_INFO("Load classify engine success!");
+    if (uav_mode) {
+        std::ifstream file_uav(uav_yolo_path.c_str());
+        if (!file_uav.good()) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "UAV mode enabled but engine not found: %s",
+                         uav_yolo_path.c_str());
+            rclcpp::shutdown();
+            return;
+        }
 
-    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
-    TDT_INFO("Load armor_yolo engine success!");
-    this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
-    TDT_INFO("Load yolo engine success!");
+        this->yolo = yolo::load(uav_yolo_path, yolo::Type::V8,
+                                static_cast<float>(uav_confidence_threshold),
+                                0.45f);
+        TDT_INFO("Load UAV yolo engine success!");
+        point2d_pub = this->create_publisher<geometry_msgs::msg::Vector3>(
+            "camera_point2D", rclcpp::SensorDataQoS());
+    } else {
+        std::ifstream file1(yolo_path.c_str());
+        if (!file1.good()) {
+            system("python3 src/utils/onnx2trt.py "
+                   "--onnx=model/ONNX/RM2025.onnx "
+                   "--saveEngine=model/TensorRT/yolo.engine "
+                   "--minBatch 1 "
+                   "--optBatch 1 "
+                   "--maxBatch 2 "
+                   "--Shape=1280x1280 "
+                   "--input_name=images");
+        } else {
+            TDT_INFO("Load yolo engine!");
+        }
+        std::ifstream file2(armor_path.c_str());
+        if (!file2.good()) {
+            system("python3 src/utils/onnx2trt.py "
+                   "--onnx=model/ONNX/armor_yolo.onnx "
+                   "--saveEngine=model/TensorRT/armor_yolo.engine "
+                   "--minBatch 1 "
+                   "--optBatch 5 "
+                   "--maxBatch 12 "
+                   "--Shape=192x192 "
+                   "--input_name=images");
+        } else {
+            TDT_INFO("Load armor_yolo engine!");
+        }
+        std::ifstream file3(classify_path.c_str());
+        if (!file3.good()) {
+            system("python3 src/utils/onnx2trt.py "
+                   "--onnx=model/ONNX/classify.onnx "
+                   "--saveEngine=model/TensorRT/classify.engine "
+                   "--minBatch 1 "
+                   "--optBatch 10 "
+                   "--maxBatch 20 "
+                   "--Shape=224x224 "
+                   "--input_name=input");
+        } else {
+            TDT_INFO("Load classify engine!");
+        }
+        std::cout << "yolo_path:" << yolo_path << "\n";
+        std::cout << "armor_path:" << armor_path << "\n";
+        std::cout << "classify_path:" << classify_path << "\n";
+        this->classifier =
+            classify::load(classify_path, classify::Type::densenet121);
+        TDT_INFO("Load classify engine success!");
+
+        this->armor_yolo =
+            yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
+        TDT_INFO("Load armor_yolo engine success!");
+        this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
+        TDT_INFO("Load yolo engine success!");
+    }
+
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
         "camera_image", rclcpp::SensorDataQoS(),
         std::bind(&Detect::callback, this, std::placeholders::_1));
@@ -146,6 +187,63 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     std::cout << "Detecting..." << std::endl;
     auto             img = cv_bridge::toCvShare(msg, "bgr8")->image;
     tdt_radar::Image image(img.data, img.cols, img.rows);
+
+    if (uav_mode) {
+        auto result = yolo->forward(image);
+
+        bool      has_target = false;
+        yolo::Box best_box;
+        for (auto& box : result) {
+            if (uav_target_class >= 0 && box.class_label != uav_target_class) {
+                continue;
+            }
+            if (!has_target || box.confidence > best_box.confidence) {
+                best_box = box;
+                has_target = true;
+            }
+        }
+
+        if (has_target) {
+            float center_x = (best_box.left + best_box.right) * 0.5f;
+            float center_y = (best_box.top + best_box.bottom) * 0.5f;
+
+            geometry_msgs::msg::Vector3 point2d;
+            point2d.x = center_x;
+            point2d.y = center_y;
+            point2d.z = best_box.confidence;
+            point2d_pub->publish(point2d);
+
+            if (debug) {
+                cv::rectangle(
+                    img,
+                    cv::Rect(best_box.left, best_box.top,
+                             best_box.right - best_box.left,
+                             best_box.bottom - best_box.top),
+                    cv::Scalar(0, 255, 255), 2);
+                cv::putText(
+                    img,
+                    "uav cls=" + std::to_string(best_box.class_label) +
+                        " conf=" + std::to_string(best_box.confidence),
+                    cv::Point(best_box.left, std::max(0.0f, best_box.top - 10)),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255),
+                    2);
+                cv::circle(img, cv::Point(center_x, center_y), 6,
+                           cv::Scalar(0, 255, 255), -1);
+            }
+        }
+
+        cv::Mat final_img;
+        cv::resize(img, final_img, cv::Size(1536, 1125));
+        auto debug_msg =
+            cv_bridge::CvImage(msg->header, "bgr8", final_img).toImageMsg();
+        debug_image_pub->publish(*debug_msg);
+        cv::imshow("detect", final_img);
+        auto key = cv::waitKey(1);
+        if (key == 'r') {
+            debug = !debug;
+        }
+        return;
+    }
 
     auto result = yolo->forward(image);
     if (result.size() == 0) {

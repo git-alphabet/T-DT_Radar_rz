@@ -1,0 +1,3 @@
+foxglove:
+  radar_enable: true
+  run_rosbag_enable: true

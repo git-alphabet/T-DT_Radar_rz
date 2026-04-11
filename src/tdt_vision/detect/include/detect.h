@@ -32,13 +32,18 @@ private:
     std::shared_ptr<Infer<int>> classifier;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_image_pub;
+    rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr point2d_pub;
 
     bool        if_rosbag = false;
     int         EnemyColor;
     bool        debug = true;
+    bool        uav_mode = false;
+    int         uav_target_class = -1;
+    double      uav_confidence_threshold = 0.35;
     std::string yolo_path;
     std::string armor_path;
     std::string classify_path;
+    std::string uav_yolo_path;
 };
 class Car {
 public:

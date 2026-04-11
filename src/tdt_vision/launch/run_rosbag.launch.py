@@ -12,9 +12,39 @@ from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+import yaml
+
+
+def _to_launch_bool(value, fallback):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "false"):
+            return lowered
+    return fallback
+
+
+def _load_foxglove_default_from_config(default_value):
+    config_path = os.environ.get(
+        "TDT_RADAR_LAUNCH_CONFIG",
+        "/workspace/T-DT_Radar/config/launch_params.yaml",
+    )
+    if not os.path.exists(config_path):
+        return default_value
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as file:
+            data = yaml.safe_load(file) or {}
+    except Exception:
+        return default_value
+
+    foxglove_cfg = data.get("foxglove", {}) if isinstance(data, dict) else {}
+    return _to_launch_bool(foxglove_cfg.get("run_rosbag_enable"), default_value)
 
 
 def generate_launch_description():
+    enable_foxglove_default = _load_foxglove_default_from_config("false")
 
     rosbag_file = LaunchConfiguration("rosbag_file")
     enable_map_server = LaunchConfiguration("enable_map_server")
@@ -122,7 +152,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "enable_foxglove",
-            default_value="false",
+            default_value=enable_foxglove_default,
             description="Enable foxglove bridge component",
         ),
         cam_detector,
