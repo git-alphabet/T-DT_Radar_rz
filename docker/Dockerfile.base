@@ -43,6 +43,7 @@ RUN export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= \
         ros-jazzy-nav2-map-server \
         ros-jazzy-pcl-conversions \
         ros-jazzy-pcl-msgs \
+        ros-jazzy-rviz2 \
         sudo \
         tzdata \
         wget \
