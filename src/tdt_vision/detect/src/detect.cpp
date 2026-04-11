@@ -93,19 +93,16 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
                       std::string("model/TensorRT/armor_yolo.engine"));
     readYamlOrDefault(fs, "classify_path", classify_path,
                       std::string("model/TensorRT/classify.engine"));
-    readYamlOrDefault(fs, "uav_mode", uav_mode, false);
-    readYamlOrDefault(fs, "uav_forward_point2d", uav_forward_point2d, true);
-    readYamlOrDefault(fs, "uav_use_right_half_roi", uav_use_right_half_roi,
-                      true);
-    readYamlOrDefault(fs, "uav_max_targets", uav_max_targets, 2);
     readYamlOrDefault(fs, "uav_yolo_path", uav_yolo_path,
-                      std::string("model/TensorRT/uav.engine"));
-    readYamlOrDefault(fs, "uav_target_class", uav_target_class, -1);
-    readYamlOrDefault(fs, "uav_blue_class", uav_blue_class, -1);
-    readYamlOrDefault(fs, "uav_red_class", uav_red_class, -1);
-    readYamlOrDefault(fs, "uav_confidence_threshold",
-                      uav_confidence_threshold, 0.35);
+                      std::string(""));
     fs.release();
+
+    // UAV 简化配置：仅保留路径；其余参数采用固定默认策略。
+    uav_mode = !uav_yolo_path.empty();
+    uav_forward_point2d = false;
+    uav_use_right_half_roi = true;
+    uav_target_class = -1;
+    uav_confidence_threshold = 0.35;
 
     std::ifstream file1(yolo_path.c_str());
     if (!file1.good()) {
@@ -226,78 +223,15 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             candidates.push_back(mapped_box);
         }
 
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const yolo::Box& a, const yolo::Box& b) {
-                      return a.confidence > b.confidence;
-                  });
-
-        const int max_targets = std::max(1, uav_max_targets);
-        std::vector<int> picked_indices;
-        picked_indices.reserve(max_targets);
-
-        auto pick_first_class = [&](int class_id) {
-            if (class_id < 0 || static_cast<int>(picked_indices.size()) >= max_targets) {
-                return;
-            }
-            for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-                if (std::find(picked_indices.begin(), picked_indices.end(), i) !=
-                    picked_indices.end()) {
-                    continue;
-                }
-                if (candidates[i].class_label == class_id) {
-                    picked_indices.push_back(i);
-                    return;
-                }
-            }
-        };
-
-        if (uav_target_class < 0) {
-            pick_first_class(uav_blue_class);
-            pick_first_class(uav_red_class);
-
-            // 未配置红蓝 class 时，优先选择不同类别，减少双机互相抢最高置信度导致的跳变。
-            for (int i = 0; i < static_cast<int>(candidates.size()) &&
-                            static_cast<int>(picked_indices.size()) < max_targets;
-                 ++i) {
-                if (std::find(picked_indices.begin(), picked_indices.end(), i) !=
-                    picked_indices.end()) {
-                    continue;
-                }
-
-                bool same_class_picked = false;
-                for (int picked : picked_indices) {
-                    if (candidates[picked].class_label ==
-                        candidates[i].class_label) {
-                        same_class_picked = true;
-                        break;
-                    }
-                }
-
-                if (!same_class_picked) {
-                    picked_indices.push_back(i);
-                }
-            }
-        }
-
-        for (int i = 0; i < static_cast<int>(candidates.size()) &&
-                        static_cast<int>(picked_indices.size()) < max_targets;
-             ++i) {
-            if (std::find(picked_indices.begin(), picked_indices.end(), i) ==
-                picked_indices.end()) {
-                picked_indices.push_back(i);
-            }
-        }
-
-        if (!picked_indices.empty()) {
-            int best_idx = picked_indices[0];
-            for (int picked : picked_indices) {
-                if (candidates[picked].confidence > candidates[best_idx].confidence) {
-                    best_idx = picked;
-                }
-            }
+        if (!candidates.empty()) {
+            auto best_it = std::max_element(
+                candidates.begin(), candidates.end(),
+                [](const yolo::Box& a, const yolo::Box& b) {
+                    return a.confidence < b.confidence;
+                });
+            const auto& best_box = *best_it;
 
             if (uav_forward_point2d && point2d_pub) {
-                const auto& best_box = candidates[best_idx];
                 geometry_msgs::msg::Vector3 point2d;
                 point2d.x = (best_box.left + best_box.right) * 0.5f;
                 point2d.y = (best_box.top + best_box.bottom) * 0.5f;
@@ -311,37 +245,22 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                              cv::Point(uav_roi.x, img.rows - 1),
                              cv::Scalar(0, 200, 200), 2);
                 }
-                for (int picked : picked_indices) {
-                    const auto& box = candidates[picked];
-                    cv::Scalar box_color(0, 255, 255);
-                    std::string team_tag = "UNK";
-                    if (uav_blue_class >= 0 && box.class_label == uav_blue_class) {
-                        box_color = cv::Scalar(255, 0, 0);
-                        team_tag = "BLUE";
-                    } else if (uav_red_class >= 0 &&
-                               box.class_label == uav_red_class) {
-                        box_color = cv::Scalar(0, 0, 255);
-                        team_tag = "RED";
-                    }
-
-                    cv::rectangle(img,
-                                  cv::Rect(box.left, box.top,
-                                           box.right - box.left,
-                                           box.bottom - box.top),
-                                  box_color, 2);
-                    cv::putText(
-                        img,
-                        "uav " + team_tag + " cls=" +
-                            std::to_string(box.class_label) + " conf=" +
-                            std::to_string(box.confidence),
-                        cv::Point(box.left, std::max(0.0f, box.top - 10)),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.65, box_color, 2);
-                    cv::circle(
-                        img,
-                        cv::Point((box.left + box.right) * 0.5f,
-                                  (box.top + box.bottom) * 0.5f),
-                        5, box_color, -1);
-                }
+                cv::rectangle(img,
+                              cv::Rect(best_box.left, best_box.top,
+                                       best_box.right - best_box.left,
+                                       best_box.bottom - best_box.top),
+                              cv::Scalar(0, 255, 255), 2);
+                cv::putText(
+                    img,
+                    "uav cls=" + std::to_string(best_box.class_label) +
+                        " conf=" + std::to_string(best_box.confidence),
+                    cv::Point(best_box.left, std::max(0.0f, best_box.top - 10)),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(0, 255, 255),
+                    2);
+                cv::circle(img,
+                           cv::Point((best_box.left + best_box.right) * 0.5f,
+                                     (best_box.top + best_box.bottom) * 0.5f),
+                           5, cv::Scalar(0, 255, 255), -1);
             }
         }
     }

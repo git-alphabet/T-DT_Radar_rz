@@ -39,12 +39,9 @@ private:
     int         EnemyColor;
     bool        debug = true;
     bool        uav_mode = false;
-    bool        uav_forward_point2d = true;
+    bool        uav_forward_point2d = false;
     bool        uav_use_right_half_roi = true;
-    int         uav_max_targets = 2;
     int         uav_target_class = -1;
-    int         uav_blue_class = -1;
-    int         uav_red_class = -1;
     double      uav_confidence_threshold = 0.35;
     std::string yolo_path;
     std::string armor_path;
