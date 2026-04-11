@@ -28,6 +28,7 @@ public:
 
 private:
     std::shared_ptr<Infer<yolo::BoxArray>>     yolo;
+    std::shared_ptr<Infer<yolo::BoxArray>>     uav_yolo;
     std::shared_ptr<Infer<yolo::BoxArray>>     armor_yolo;
     std::shared_ptr<Infer<int>> classifier;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
@@ -38,6 +39,7 @@ private:
     int         EnemyColor;
     bool        debug = true;
     bool        uav_mode = false;
+    bool        uav_forward_point2d = true;
     int         uav_target_class = -1;
     double      uav_confidence_threshold = 0.35;
     std::string yolo_path;

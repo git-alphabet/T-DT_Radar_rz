@@ -3,7 +3,8 @@
 yolo_path: "model/TensorRT/yolo.engine"
 armor_path: "model/TensorRT/armor_yolo.engine"
 classify_path: "model/TensorRT/classify.engine"
-uav_mode: 0
-uav_yolo_path: "model/TensorRT/uav.engine"
+uav_mode: 1
+uav_forward_point2d: 0
+uav_yolo_path: "model/TensorRT/RM-Plane-yolo26n-p2-2026-04-03.engine"
 uav_target_class: -1
 uav_confidence_threshold: 0.35
