@@ -1,23 +1,8 @@
 services:
   radar:
     container_name: tdt-radar-dev
-    build:
-      context: .
-      dockerfile: Dockerfile.base
-      args:
-        USERNAME: ${DEV_USER:-radar}
-        USER_UID: ${LOCAL_UID:-1000}
-        USER_GID: ${LOCAL_GID:-1000}
-        INSTALL_EXTRA_TOOLS: ${INSTALL_EXTRA_TOOLS:-0}
-        INSTALL_NVIDIA_STACK: ${INSTALL_NVIDIA_STACK:-1}
-        NVIDIA_CUDA_REPO_URL: ${NVIDIA_CUDA_REPO_URL:-https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64}
-        CUDA_NVCC_PKG: ${CUDA_NVCC_PKG:-cuda-nvcc-12-6}
-        CUDA_CUDART_DEV_PKG: ${CUDA_CUDART_DEV_PKG:-cuda-cudart-dev-12-6}
-        CUDNN_DEV_PKG: ${CUDNN_DEV_PKG:-libcudnn9-dev-cuda-12}
-        CUDNN_DEV_VERSION: ${CUDNN_DEV_VERSION:-}
-        PIN_TENSORRT: ${PIN_TENSORRT:-1}
-        TENSORRT_VERSION: ${TENSORRT_VERSION:-10.7.0.23-1+cuda12.6}
-    image: tdt-radar:jazzy-base
+    image: alphabet2006/tdt-radar:latest
+    pull_policy: never
     user: "0:0"
     group_add:
       - "0"
@@ -49,7 +34,8 @@ services:
     tty: true
 
   radar_user:
-    image: tdt-radar:jazzy-base
+    image: alphabet2006/tdt-radar:latest
+    pull_policy: never
     profiles:
       - user
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
